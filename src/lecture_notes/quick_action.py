@@ -27,9 +27,12 @@ SHELL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
 def shell_command(executable: Path) -> str:
+    # Errors are reported by lecture-notes itself (notification + log); a non-zero
+    # exit would make Finder show an extra generic "action failed" alert.
     return (
         f'export PATH="{SHELL_PATH}"\n'
         f'{shlex.quote(str(executable))} "$@" >/dev/null 2>&1\n'
+        "exit 0\n"
     )
 
 
