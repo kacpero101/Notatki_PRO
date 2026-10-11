@@ -1,0 +1,64 @@
+# lecture-notes configuration.
+# Copy to ~/.config/lecture-notes/config.toml (`lecture-notes setup` does it for you)
+# and edit. Any key you leave out falls back to the value in this file.
+# The API key is NOT stored here — it lives in the macOS Keychain.
+
+[llm]
+# Provider implementation. Currently available: "anthropic".
+provider = "anthropic"
+# Model used for notes. Alternative: "claude-haiku-5-5" (much cheaper, less thorough).
+model = "claude-sonnet-5-5"
+# Reasoning effort: "low", "medium", "high", "xhigh", "max".
+effort = "medium"
+# Upper bound for the model's answer (notes JSON + reasoning).
+max_output_tokens = 32000
+# Transcript longer than this (characters) is split into parts, each part is
+# summarised separately and the partial notes are merged in a final call.
+max_transcript_chars_per_request = 250000
+# On a safety-classifier refusal, let the API retry on a fallback model
+# (server-side fallback, Claude API only). Set to false to disable.
+refusal_fallback = true
+
+[whisper]
+model = "mlx-community/whisper-large-v3-turbo"
+language = "pl"
+# Optional hint: course name, technical terms, lecturer's name. Improves
+# spelling of domain vocabulary. Keep it short (a sentence or a list of terms).
+initial_prompt = ""
+# Anti-hallucination / anti-loop decoding parameters (see README).
+condition_on_previous_text = false
+compression_ratio_threshold = 2.4
+logprob_threshold = -1.0
+no_speech_threshold = 0.6
+# Skip silent stretches longer than this (seconds) when they produce
+# suspicious text. Requires word timestamps (slightly slower). 0 disables.
+hallucination_silence_threshold = 2.0
+
+[transcript]
+# Transcript sent to the LLM is merged into blocks of roughly this length.
+block_min_seconds = 30
+block_max_seconds = 60
+
+[paths]
+# Full paths are needed because Finder Quick Actions do not get your shell PATH.
+ffmpeg = "/opt/homebrew/bin/ffmpeg"
+ffprobe = "/opt/homebrew/bin/ffprobe"
+
+# Prices in USD per 1 million tokens. Check https://www.anthropic.com/pricing
+# and update when they change. Used only to estimate the cost shown to you.
+# Optional "long context" tier: if a single request has more input tokens than
+# long_context_threshold, the *_long prices apply to that whole request.
+[pricing."claude-sonnet-5-5"]
+input = 2.00
+output = 10.00
+
+[pricing."claude-haiku-5-5"]
+input = 0.10
+output = 0.50
+long_context_threshold = 100000
+input_long = 0.50
+output_long = 2.50
+
+[pricing."claude-opus-5-5"]
+input = 4.00
+output = 20.00

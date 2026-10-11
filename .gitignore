@@ -1,0 +1,59 @@
+# --- Recordings (never commit lectures) ---
+*.m4a
+*.mp3
+*.wav
+*.aac
+*.aif
+*.aiff
+*.flac
+*.ogg
+*.opus
+*.oga
+*.wma
+*.amr
+*.caf
+*.webm
+*.mp4
+*.m4v
+*.mkv
+*.mov
+*.avi
+*.wmv
+*.flv
+*.mpg
+*.mpeg
+*.3gp
+*.ts
+
+# --- Transcripts and generated notes ---
+*.srt
+*.vtt
+*.docx
+# plain-text transcripts; keep repo text files explicitly whitelisted below
+*.txt
+!requirements*.txt
+
+# --- Secrets and local config ---
+.env
+.env.*
+config.toml
+!config.example.toml
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- macOS ---
+.DS_Store
