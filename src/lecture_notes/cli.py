@@ -13,6 +13,7 @@ from pathlib import Path
 from . import __version__
 from .config import CONFIG_PATH, LOG_DIR, load_config, write_default_config
 from .llm import LLMError
+from .modes import MODES, get_mode
 from .notify import notify
 from .pipeline import UserError, process_file
 
@@ -51,8 +52,11 @@ def _prepare_environment(config: dict) -> None:
 
 # ------------------------------------------------------------------- process
 
-def run_files(files: list[str], model: str | None, use_notifications: bool, verbose: bool) -> int:
+def run_files(
+    files: list[str], model: str | None, use_notifications: bool, verbose: bool, mode_name: str = "lecture"
+) -> int:
     log_file = setup_logging(verbose)
+    mode = get_mode(mode_name)
     say = notify if use_notifications else (lambda *a, **k: None)
     try:
         config = load_config()
@@ -69,11 +73,11 @@ def run_files(files: list[str], model: str | None, use_notifications: bool, verb
     for i, name in enumerate(files, 1):
         path = Path(name)
         counter = f" ({i}/{len(files)})" if len(files) > 1 else ""
-        say(f"Przetwarzam{counter}: {path.name}", title="Notatki z wykładu")
+        say(f"Przetwarzam{counter}: {path.name}", title=mode.label)
         print(f"→ {path.name}")
-        log.info("Processing %s (model=%s)", path, config["llm"]["model"])
+        log.info("Processing %s (mode=%s, model=%s)", path, mode.name, config["llm"]["model"])
         try:
-            result = process_file(path, config)
+            result = process_file(path, config, mode=mode)
         except (UserError, LLMError) as e:
             failures += 1
             log.error("%s: %s", path.name, e, exc_info=True)
@@ -88,7 +92,7 @@ def run_files(files: list[str], model: str | None, use_notifications: bool, verb
             print(f"  ✗ {type(e).__name__}: {e} (log: {log_file})", file=sys.stderr)
             continue
         say(f"Gotowe: {result.notes_path.name}\nKoszt API {result.cost_text}",
-            title="Notatki z wykładu", sound="Glass")
+            title=mode.label, sound="Glass")
         print(f"  ✓ {result.notes_path}")
         if result.transcript_paths:
             print(f"  ✓ {result.transcript_paths[0].name}, {result.transcript_paths[1].name}")
@@ -166,19 +170,21 @@ def run_install_quick_action() -> int:
     if not exe.exists():
         print(f"Nie znaleziono {exe}. Zainstaluj najpierw program przez pipx.", file=sys.stderr)
         return 1
-    target = install(exe)
-    print(f"✓ Zainstalowano szybką czynność: {target}")
+    targets = install(exe)
+    for target in targets:
+        print(f"✓ Zainstalowano szybką czynność: {target.name.removesuffix('.workflow')}")
     print(f"  Uruchamia: {exe}")
-    print("  W Finderze: prawy klik na pliku → Szybkie czynności → Zrób notatki.")
-    print("  Jeśli jej nie widać: Ustawienia systemowe → Ogólne → Rozszerzenia logowania i rozszerzenia")
-    print("  → Finder → włącz „Zrób notatki”.")
+    print("  W Finderze: prawy klik na pliku → Szybkie czynności.")
+    print("  Jeśli ich nie widać: Ustawienia systemowe → Ogólne → Rozszerzenia logowania i rozszerzenia")
+    print("  → Finder → włącz obie czynności.")
     return 0
 
 
 def run_uninstall_quick_action() -> int:
     from .quick_action import uninstall
 
-    print("✓ Usunięto szybką czynność." if uninstall() else "Szybka czynność nie była zainstalowana.")
+    removed = uninstall()
+    print(f"✓ Usunięto szybkie czynności: {removed}." if removed else "Szybkie czynności nie były zainstalowane.")
     return 0
 
 
@@ -199,13 +205,17 @@ def main(argv: list[str] | None = None) -> int:
                     "uninstall-quick-action.",
     )
     parser.add_argument("files", nargs="+", help="nagrania (m4a, mp3, mp4, mkv, …) lub transkrypcje (.txt, .srt)")
+    parser.add_argument(
+        "--mode", choices=list(MODES), default="lecture",
+        help="lecture: notatki z wykładu (domyślnie); general: notatki z nagrania na dowolny temat",
+    )
     parser.add_argument("--model", help="nadpisz model z config.toml (np. claude-haiku-5-5)")
     parser.add_argument("--no-notify", action="store_true", help="bez powiadomień macOS")
     parser.add_argument("-q", "--quiet", action="store_true", help="bez logów w terminalu")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
     verbose = sys.stderr.isatty() and not args.quiet
-    return run_files(args.files, args.model, not args.no_notify, verbose)
+    return run_files(args.files, args.model, not args.no_notify, verbose, args.mode)
 
 
 if __name__ == "__main__":

@@ -3,13 +3,14 @@ import plistlib
 import subprocess
 
 import pytest
-from conftest import FakeProvider, SAMPLE_NOTES
+from conftest import SAMPLE_GENERAL_NOTES, SAMPLE_NOTES, FakeProvider
 from docx import Document
 
 from lecture_notes import cli
 from lecture_notes.config import load_config
+from lecture_notes.modes import GENERAL, LECTURE
 from lecture_notes.paths import notes_path_for, unique_path
-from lecture_notes.pipeline import UserError, process_file
+from lecture_notes.pipeline import UserError, process_file, whisper_settings
 from lecture_notes.quick_action import FILE_TYPES, install, shell_command, uninstall
 from lecture_notes.transcript import Segment, Transcript
 
@@ -129,25 +130,87 @@ def test_cli_notifies_start_success_and_error(tmp_path, config, monkeypatch):
     assert (tmp_path / "logs" / "lecture-notes.log").exists()
 
 
-def test_quick_action_bundle(tmp_path):
-    exe = tmp_path / "bin" / "lecture-notes"
-    target = install(exe, services_dir=tmp_path)
-    assert target.name == "Zrób notatki.workflow"
-    for name in ("Info.plist", "document.wflow"):
-        lint = subprocess.run(["/usr/bin/plutil", "-lint", str(target / "Contents" / name)], capture_output=True)
-        assert lint.returncode == 0, lint.stdout
+def _workflow(target):
     info = plistlib.loads((target / "Contents" / "Info.plist").read_bytes())
-    service = info["NSServices"][0]
+    wflow = plistlib.loads((target / "Contents" / "document.wflow").read_bytes())
+    return info["NSServices"][0], wflow["actions"][0]["action"]["ActionParameters"]
+
+
+def test_quick_action_bundles(tmp_path):
+    exe = tmp_path / "bin" / "lecture-notes"
+    targets = install(exe, services_dir=tmp_path)
+    assert [t.name for t in targets] == ["Zrób notatki.workflow", "Zrób notatki (dowolny temat).workflow"]
+    for target in targets:
+        for name in ("Info.plist", "document.wflow"):
+            lint = subprocess.run(["/usr/bin/plutil", "-lint", str(target / "Contents" / name)], capture_output=True)
+            assert lint.returncode == 0, lint.stdout
+
+    service, params = _workflow(targets[0])
     assert service["NSMenuItem"]["default"] == "Zrób notatki"
     assert service["NSSendFileTypes"] == FILE_TYPES
-    wflow = plistlib.loads((target / "Contents" / "document.wflow").read_bytes())
-    params = wflow["actions"][0]["action"]["ActionParameters"]
     assert params["inputMethod"] == 1 and params["shell"] == "/bin/zsh"
-    assert str(exe) in params["COMMAND_STRING"]
+    assert str(exe) in params["COMMAND_STRING"] and "--mode" not in params["COMMAND_STRING"]
     assert 'export PATH="/opt/homebrew/bin' in params["COMMAND_STRING"]
-    assert uninstall(services_dir=tmp_path) and not target.exists()
+
+    service, params = _workflow(targets[1])
+    assert service["NSMenuItem"]["default"] == "Zrób notatki (dowolny temat)"
+    assert f'{exe} --mode general "$@"' in params["COMMAND_STRING"]
+
+    assert uninstall(services_dir=tmp_path) == 2
+    assert not any(t.exists() for t in targets)
+    assert uninstall(services_dir=tmp_path) == 0
 
 
 def test_shell_command_quotes_paths_with_spaces(tmp_path):
-    cmd = shell_command(tmp_path / "my dir" / "lecture-notes")
-    assert "'" in cmd and '"$@"' in cmd
+    cmd = shell_command(tmp_path / "my dir" / "lecture-notes", ["--mode", "general"])
+    assert "'" in cmd and '--mode general "$@"' in cmd
+
+
+def test_general_mode_pipeline(tmp_path, config):
+    rec = tmp_path / "Podcast.mp3"
+    rec.write_bytes(b"x")
+    seen = {}
+
+    def transcriber(path, whisper_cfg):
+        seen.update(whisper_cfg)
+        return Transcript([Segment("Reinforcement learning is about rewards.", 0.0, 50.0)], language="en")
+
+    provider = FakeProvider(responses=[copy.deepcopy(SAMPLE_GENERAL_NOTES)])
+    result = process_file(rec, config, provider_factory=lambda c: provider, transcriber=transcriber, mode=GENERAL)
+
+    assert seen["language"] == "" and seen["initial_prompt"] == ""  # auto-detect, no course hint
+    assert seen["model"] == config["whisper"]["model"]
+    assert provider.calls[0]["system"] == GENERAL.system_prompt
+    assert "Wykryty język nagrania: en" in provider.calls[0]["user"]
+    doc = Document(str(result.notes_path))
+    headings = [p.text for p in doc.paragraphs if p.style.name == "Heading 1"]
+    assert "Najważniejsze wnioski" in headings and "Na egzamin / zaliczenie" not in headings
+    assert doc.core_properties.subject == "Notatki"
+
+
+def test_lecture_mode_keeps_polish_whisper_settings(config):
+    config["whisper"]["initial_prompt"] = "Analiza matematyczna"
+    assert whisper_settings(config, LECTURE)["language"] == "pl"
+    assert whisper_settings(config, LECTURE)["initial_prompt"] == "Analiza matematyczna"
+    general = whisper_settings(config, GENERAL)
+    assert general["language"] == "" and general["initial_prompt"] == ""
+    config["modes"]["general"]["whisper_language"] = "en"
+    assert whisper_settings(config, GENERAL)["language"] == "en"
+
+
+def test_cli_mode_flag(tmp_path, config, monkeypatch):
+    src = tmp_path / "film.srt"
+    src.write_text("1\n00:00:01,000 --> 00:00:02,000\nContent.\n", encoding="utf-8")
+    sent, used = [], []
+    monkeypatch.setattr(cli, "notify", lambda msg, title="", sound=None: sent.append(title))
+    monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "logs")
+
+    def fake_factory(cfg):
+        provider = FakeProvider(responses=[copy.deepcopy(SAMPLE_GENERAL_NOTES)])
+        used.append(provider)
+        return provider
+
+    monkeypatch.setattr("lecture_notes.pipeline.create_provider", fake_factory)
+    assert cli.main(["--mode", "general", str(src), "-q"]) == 0
+    assert used[0].calls[0]["system"] == GENERAL.system_prompt
+    assert set(sent) == {"Notatki"}

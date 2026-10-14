@@ -1,4 +1,4 @@
-"""Install the Finder Quick Action "Zrób notatki" into ~/Library/Services."""
+"""Install the Finder Quick Actions (one per note mode) into ~/Library/Services."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import subprocess
 import uuid
 from pathlib import Path
 
-ACTION_NAME = "Zrób notatki"
+from .modes import MODES, NoteMode
+
 SERVICES_DIR = Path.home() / "Library" / "Services"
 
 # Content types the action is offered for. .srt and .mkv have no system-declared
@@ -26,22 +27,26 @@ FILE_TYPES = [
 SHELL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
-def shell_command(executable: Path) -> str:
+def mode_args(mode: NoteMode) -> list[str]:
+    return [] if mode.name == "lecture" else ["--mode", mode.name]
+
+
+def shell_command(executable: Path, args: list[str] | None = None) -> str:
     # Errors are reported by lecture-notes itself (notification + log); a non-zero
     # exit would make Finder show an extra generic "action failed" alert.
     return (
         f'export PATH="{SHELL_PATH}"\n'
-        f'{shlex.quote(str(executable))} "$@" >/dev/null 2>&1\n'
+        f'{shlex.join([str(executable), *(args or [])])} "$@" >/dev/null 2>&1\n'
         "exit 0\n"
     )
 
 
-def info_plist() -> dict:
+def info_plist(name: str) -> dict:
     return {
         "NSServices": [{
             "NSBackgroundColorName": "background",
             "NSIconName": "NSActionTemplate",
-            "NSMenuItem": {"default": ACTION_NAME},
+            "NSMenuItem": {"default": name},
             "NSMessage": "runWorkflowAsService",
             "NSRequiredContext": {"NSApplicationIdentifier": "com.apple.finder"},
             "NSSendFileTypes": FILE_TYPES,
@@ -49,8 +54,8 @@ def info_plist() -> dict:
     }
 
 
-def document_wflow(executable: Path) -> dict:
-    command = shell_command(executable)
+def document_wflow(executable: Path, args: list[str] | None = None) -> dict:
+    command = shell_command(executable, args)
     return {
         "AMApplicationBuild": "523",
         "AMApplicationVersion": "2.10",
@@ -119,31 +124,39 @@ def document_wflow(executable: Path) -> dict:
     }
 
 
-def workflow_path(services_dir: Path = SERVICES_DIR) -> Path:
-    return services_dir / f"{ACTION_NAME}.workflow"
+def workflow_path(name: str, services_dir: Path = SERVICES_DIR) -> Path:
+    return services_dir / f"{name}.workflow"
 
 
-def install(executable: Path, services_dir: Path = SERVICES_DIR) -> Path:
-    target = workflow_path(services_dir)
-    if target.exists():
-        shutil.rmtree(target)  # our own bundle; reinstall replaces it
-    contents = target / "Contents"
-    contents.mkdir(parents=True)
-    with (contents / "Info.plist").open("wb") as f:
-        plistlib.dump(info_plist(), f)
-    with (contents / "document.wflow").open("wb") as f:
-        plistlib.dump(document_wflow(executable), f)
+def install(executable: Path, services_dir: Path = SERVICES_DIR) -> list[Path]:
+    """Install one Quick Action per note mode; returns the bundle paths."""
+    targets = []
+    for mode in MODES.values():
+        target = workflow_path(mode.quick_action, services_dir)
+        if target.exists():
+            shutil.rmtree(target)  # our own bundle; reinstall replaces it
+        contents = target / "Contents"
+        contents.mkdir(parents=True)
+        with (contents / "Info.plist").open("wb") as f:
+            plistlib.dump(info_plist(mode.quick_action), f)
+        with (contents / "document.wflow").open("wb") as f:
+            plistlib.dump(document_wflow(executable, mode_args(mode)), f)
+        targets.append(target)
     _refresh_services()
-    return target
+    return targets
 
 
-def uninstall(services_dir: Path = SERVICES_DIR) -> bool:
-    target = workflow_path(services_dir)
-    if not target.exists():
-        return False
-    shutil.rmtree(target)
-    _refresh_services()
-    return True
+def uninstall(services_dir: Path = SERVICES_DIR) -> int:
+    """Remove all Quick Actions of this program; returns how many were removed."""
+    removed = 0
+    for mode in MODES.values():
+        target = workflow_path(mode.quick_action, services_dir)
+        if target.exists():
+            shutil.rmtree(target)
+            removed += 1
+    if removed:
+        _refresh_services()
+    return removed
 
 
 def _refresh_services() -> None:
