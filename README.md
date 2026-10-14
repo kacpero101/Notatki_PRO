@@ -5,9 +5,14 @@ Turn lecture recordings into study notes in Word — on a Mac, with one right-cl
 `lecture-notes` transcribes a recording locally with [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper)
 (Apple Silicon), saves the transcript as `.txt` and `.srt`, and asks an LLM (Claude by default)
 to produce structured notes, which are rendered into a `.docx` file next to the recording.
-The notes are in Polish; the tool is built for Polish-language lectures.
+The notes are always in Polish. There are two modes:
 
-**What the notes contain**
+| Mode | Finder Quick Action | CLI | For |
+|---|---|---|---|
+| **Lecture** (default) | *Zrób notatki* | `lecture-notes file` | Polish university lectures, with an exam section |
+| **Any topic** | *Zrób notatki (dowolny temat)* | `lecture-notes --mode general file` | podcasts, videos, talks, meetings — any topic, any language |
+
+**What lecture notes contain**
 
 - title (file name) and recording date
 - summary of the whole lecture
@@ -24,6 +29,20 @@ The notes are in Polish; the tool is built for Polish-language lectures.
 The model is instructed to use only what was said in the lecture and never to invent
 timestamps; timestamps returned by the model are validated in code and dropped when the
 source has none (e.g. a plain `.txt`).
+
+**What “any topic” notes contain**
+
+- summary, topic-by-topic notes, key concepts
+- key takeaways (with timestamps)
+- formulas and examples — only when the recording has any
+- review questions, fragments to double-check
+- **“Uzupełnienia (spoza nagrania)”** — the only place where the model may add its own
+  knowledge: short explanations, context, or corrections of clearly wrong claims. This
+  section is visibly marked as not coming from the recording; every other section is based
+  on the recording alone.
+
+The recording language is detected automatically (e.g. English videos); key terms from a
+foreign-language recording are given with the original term in parentheses.
 
 ## Requirements
 
@@ -64,6 +83,7 @@ In `config.toml` you can change:
 |---|---|
 | `[llm]` | `model` (`claude-sonnet-5-5` default, `claude-haiku-5-5` cheaper), `effort`, output limit, chunk size for very long lectures |
 | `[whisper]` | Whisper model, language, `initial_prompt` (course vocabulary — helps with technical terms), anti-loop parameters |
+| `[modes.general]` | Whisper language (empty = auto-detect) and vocabulary hint for the “any topic” mode |
 | `[transcript]` | length of the timestamped blocks sent to the model (30–60 s) |
 | `[paths]` | full paths to `ffmpeg` / `ffprobe` |
 | `[pricing.*]` | USD per million tokens, used for the cost estimate — **update when prices change** |
@@ -74,8 +94,11 @@ In `config.toml` you can change:
 lecture-notes install-quick-action      # or: ./scripts/install-quick-action.sh
 ```
 
-Then right-click one or more recordings (`m4a`, `mp3`, `wav`, `mp4`, `mkv`, `mov`, …) or
-transcripts (`.txt`, `.srt`) → **Quick Actions → Zrób notatki**.
+This installs two actions. Right-click one or more recordings (`m4a`, `mp3`, `wav`, `mp4`,
+`mkv`, `mov`, …) or transcripts (`.txt`, `.srt`) → **Quick Actions →**
+
+- **Zrób notatki** — lecture notes,
+- **Zrób notatki (dowolny temat)** — notes on any topic.
 
 You get a notification when processing starts, and another one when the notes are ready
 (with the API cost) or when something failed. A one-hour lecture takes a few minutes to
@@ -90,16 +113,18 @@ Wykład 3.srt                 # transcript with timestamps
 Wykład 3 – notatki.docx      # notes
 ```
 
-If the action is missing: *System Settings → General → Login Items & Extensions → Finder*
-and enable “Zrób notatki”. If no notifications appear, allow notifications for
+If an action is missing: *System Settings → General → Login Items & Extensions → Finder*
+and enable both “Zrób notatki” actions. If no notifications appear, allow notifications for
 *Script Editor* in *System Settings → Notifications*. Remove the action with
-`lecture-notes uninstall-quick-action`.
+`lecture-notes uninstall-quick-action` (removes both). After upgrading from a version with
+a single action, run `lecture-notes install-quick-action` again to get the second one.
 
 ## Usage from the terminal
 
 ```bash
 lecture-notes "Wykład 3.m4a"
 lecture-notes wyklad.srt notatki.txt          # several files, processed one after another
+lecture-notes --mode general podcast.mp3        # notes on any topic
 lecture-notes --model claude-haiku-5-5 wyklad.mp4
 lecture-notes --no-notify wyklad.m4a
 ```
@@ -147,7 +172,8 @@ src/lecture_notes/
   pipeline.py       one file: transcribe → notes → .docx
   transcribe.py     mlx-whisper with anti-loop settings
   transcript.py     segments, .txt/.srt parsing and writing, loop removal, 30–60 s blocks
-  notes.py          JSON schema, prompts, chunking and merging
+  modes.py          note modes: JSON schema, prompts and document sections
+  notes.py          prompting, chunking and merging
   llm/base.py       LLMProvider interface
   llm/anthropic_provider.py
   docx_builder.py   python-docx rendering
@@ -157,7 +183,8 @@ src/lecture_notes/
 ```
 
 The model returns JSON validated against a schema (structured outputs); the document is
-built in code. To add another provider (e.g. Azure OpenAI or a local model), implement
+built in code. A new kind of notes is a new `NoteMode` in `modes.py` (it automatically gets
+its own Quick Action and `--mode` value). To add another provider (e.g. Azure OpenAI or a local model), implement
 `LLMProvider.generate_json` and register it in `lecture_notes/llm/__init__.py`.
 
 ## Development
@@ -184,15 +211,21 @@ transkrypcji dokument Word: streszczenie, notatki tematyczne, definicje, wzory, 
 wprost, osobno to, co tylko akcentował), pytania do powtórki i listę fragmentów
 transkrypcji do sprawdzenia.
 
+Druga czynność, **„Zrób notatki (dowolny temat)”** (`--mode general`), służy do nagrań na
+dowolny temat — podcastów, filmów, prezentacji — w dowolnym języku (wykrywanym
+automatycznie). Notatki są po polsku, zamiast sekcji egzaminacyjnej mają „Najważniejsze
+wnioski”, a wiedzę spoza nagrania model może dodać tylko w wyraźnie oznaczonej sekcji
+„Uzupełnienia (spoza nagrania)”.
+
 Szybki start:
 
 ```bash
 pipx install --python /opt/homebrew/bin/python3.12 .
 lecture-notes setup                  # klucz API trafia do Pęku kluczy macOS
-lecture-notes install-quick-action   # czynność „Zrób notatki” w Finderze
+lecture-notes install-quick-action   # obie czynności w Finderze
 ```
 
 Potem: prawy klik na nagraniu lub pliku `.txt` / `.srt` → *Szybkie czynności* →
-*Zrób notatki*. Powiadomienie pokaże, kiedy notatki będą gotowe i ile kosztowało wywołanie
+*Zrób notatki* albo *Zrób notatki (dowolny temat)*. Powiadomienie pokaże, kiedy notatki będą gotowe i ile kosztowało wywołanie
 API. Konfiguracja (model, cennik, podpowiedź słownictwa dla Whispera) jest w
 `~/.config/lecture-notes/config.toml`, logi w `~/Library/Logs/lecture-notes/`.
