@@ -34,6 +34,15 @@ no_speech_threshold = 0.6
 # suspicious text. Requires word timestamps (slightly slower). 0 disables.
 hallucination_silence_threshold = 2.0
 
+# "Any topic" notes (Finder: "Zrób notatki (dowolny temat)", CLI: --mode general).
+# These values override [whisper] for that mode only.
+[modes.general]
+# Recording language, e.g. "pl" or "en"; empty = detect automatically.
+# Notes are always written in Polish.
+whisper_language = ""
+# Vocabulary hint for this mode ([whisper].initial_prompt is meant for your courses).
+whisper_initial_prompt = ""
+
 [transcript]
 # Transcript sent to the LLM is merged into blocks of roughly this length.
 block_min_seconds = 30

@@ -14,6 +14,8 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from docx.text.paragraph import Paragraph
 
+from .modes import LECTURE, NoteMode
+
 MONO_FONT = "Menlo"
 FORMULA_STYLE = "Wzór"
 GRAY = RGBColor(0x6B, 0x6B, 0x6B)
@@ -81,17 +83,18 @@ def _items(notes: dict[str, Any], key: str) -> list[Any]:
 
 
 # ----------------------------------------------------------------- sections
+# Each renderer takes (doc, notes, heading); the order comes from the note mode.
 
-def _summary(doc, notes):
-    doc.add_heading("Streszczenie", level=1)
+def _summary(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     if notes.get("summary"):
         doc.add_paragraph(notes["summary"])
     else:
         _none(doc)
 
 
-def _topics(doc, notes):
-    doc.add_heading("Notatki tematyczne", level=1)
+def _topics(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     topics = _items(notes, "topics")
     if not topics:
         _none(doc)
@@ -106,8 +109,8 @@ def _topics(doc, notes):
             doc.add_paragraph(point, style="List Bullet")
 
 
-def _definitions(doc, notes):
-    doc.add_heading("Definicje", level=1)
+def _definitions(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     defs = _items(notes, "definitions")
     if not defs:
         _none(doc)
@@ -118,8 +121,19 @@ def _definitions(doc, notes):
         p.add_run(" — " + d.get("definition", ""))
 
 
-def _formulas(doc, notes):
-    doc.add_heading("Wzory i przykłady", level=1)
+def _takeaways(doc, notes, heading):
+    doc.add_heading(heading, level=1)
+    items = _items(notes, "takeaways")
+    if not items:
+        _none(doc)
+    for t in items:
+        p = doc.add_paragraph(style="List Bullet")
+        _timestamp(p, t.get("timestamp", ""))
+        p.add_run(t.get("text", ""))
+
+
+def _formulas(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     formulas = _items(notes, "formulas")
     if not formulas:
         _none(doc)
@@ -135,15 +149,15 @@ def _formulas(doc, notes):
             _mono_run(ex, f["example"])
 
 
-def _exam(doc, notes):
-    doc.add_heading("Na egzamin / zaliczenie", level=1)
+def _exam(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     items = _items(notes, "exam_items")
     groups = [
         ("Prowadzący powiedział wprost", [i for i in items if i.get("kind") == "explicit"]),
         ("Prawdopodobne (akcentowane lub powtarzane)", [i for i in items if i.get("kind") != "explicit"]),
     ]
-    for heading, group in groups:
-        doc.add_heading(heading, level=2)
+    for group_heading, group in groups:
+        doc.add_heading(group_heading, level=2)
         if not group:
             _none(doc)
         for item in group:
@@ -158,8 +172,8 @@ def _exam(doc, notes):
                 p.add_run(item["reason"])
 
 
-def _questions(doc, notes):
-    doc.add_heading("Pytania do powtórki", level=1)
+def _questions(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     questions = _items(notes, "review_questions")
     if not questions:
         _none(doc)
@@ -167,8 +181,27 @@ def _questions(doc, notes):
         doc.add_paragraph(q, style="List Number")
 
 
-def _issues(doc, notes):
-    doc.add_heading("Fragmenty do sprawdzenia", level=1)
+def _supplements(doc, notes, heading):
+    doc.add_heading(heading, level=1)
+    note = doc.add_paragraph().add_run(
+        "Tych informacji nie ma w nagraniu — dodał je model językowy jako wyjaśnienie lub kontekst. "
+        "Mogą zawierać błędy; traktuj je jako wskazówkę, nie jako treść źródła."
+    )
+    note.italic = True
+    note.font.size = Pt(9)
+    note.font.color.rgb = GRAY
+    items = _items(notes, "supplements")
+    if not items:
+        _none(doc)
+    for s in items:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(s.get("title", "")).bold = True
+        if s.get("content"):
+            p.add_run(" — " + s["content"])
+
+
+def _issues(doc, notes, heading):
+    doc.add_heading(heading, level=1)
     issues = _items(notes, "transcript_issues")
     if not issues:
         _none(doc, "Nie wykryto podejrzanych fragmentów.")
@@ -181,6 +214,19 @@ def _issues(doc, notes):
         if i.get("suggestion"):
             p.add_run("\nPrawdopodobnie: ").italic = True
             p.add_run(i["suggestion"])
+
+
+RENDERERS = {
+    "summary": _summary,
+    "topics": _topics,
+    "definitions": _definitions,
+    "takeaways": _takeaways,
+    "formulas": _formulas,
+    "exam_items": _exam,
+    "review_questions": _questions,
+    "supplements": _supplements,
+    "transcript_issues": _issues,
+}
 
 
 def _metadata(doc, meta: DocumentMeta):
@@ -208,12 +254,12 @@ def _metadata(doc, meta: DocumentMeta):
 
 # --------------------------------------------------------------------- main
 
-def build_document(notes: dict[str, Any], meta: DocumentMeta):
+def build_document(notes: dict[str, Any], meta: DocumentMeta, mode: NoteMode = LECTURE):
     doc = Document()
     _prepare_styles(doc)
 
     doc.core_properties.title = meta.title
-    doc.core_properties.subject = "Notatki z wykładu"
+    doc.core_properties.subject = mode.label
     doc.core_properties.author = "lecture-notes"
     doc.core_properties.language = "pl-PL"
 
@@ -224,17 +270,14 @@ def build_document(notes: dict[str, Any], meta: DocumentMeta):
     else:
         sub.add_run("Data nagrania: nieznana").italic = True
 
-    _summary(doc, notes)
-    _topics(doc, notes)
-    _definitions(doc, notes)
-    _formulas(doc, notes)
-    _exam(doc, notes)
-    _questions(doc, notes)
-    _issues(doc, notes)
+    for section in mode.sections:
+        if section.optional and not notes.get(section.key):
+            continue
+        RENDERERS[section.key](doc, notes, section.heading)
     _metadata(doc, meta)
     return doc
 
 
-def save_document(notes: dict[str, Any], meta: DocumentMeta, path: Path) -> Path:
-    build_document(notes, meta).save(str(path))
+def save_document(notes: dict[str, Any], meta: DocumentMeta, path: Path, mode: NoteMode = LECTURE) -> Path:
+    build_document(notes, meta, mode).save(str(path))
     return path

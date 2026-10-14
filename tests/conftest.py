@@ -31,6 +31,17 @@ SAMPLE_NOTES: dict[str, Any] = {
     ],
 }
 
+SAMPLE_GENERAL_NOTES: dict[str, Any] = {
+    "summary": "Podcast o uczeniu ze wzmocnieniem.",
+    "topics": [{"title": "Agent i środowisko", "timestamp": "00:00:00", "points": ["Agent maksymalizuje nagrodę."]}],
+    "definitions": [{"term": "Polityka (policy)", "definition": "Reguła wyboru akcji.", "timestamp": "00:00:45"}],
+    "takeaways": [{"text": "Nagroda definiuje cel agenta.", "timestamp": "00:00:45"}],
+    "formulas": [],
+    "review_questions": ["Czym jest polityka?"],
+    "supplements": [{"title": "Kontekst", "content": "Termin pochodzi z psychologii behawioralnej."}],
+    "transcript_issues": [],
+}
+
 
 class FakeProvider(LLMProvider):
     """LLM double: records calls and returns canned notes."""

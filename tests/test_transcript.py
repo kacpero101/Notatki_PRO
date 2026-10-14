@@ -140,3 +140,13 @@ def test_merge_without_timestamps_by_length():
 def test_format_blocks():
     from lecture_notes.transcript import Block
     assert format_blocks([Block("Ala", 0.0), Block("ma kota", 75.0)]) == "[00:00:00] Ala\n[00:01:15] ma kota"
+
+
+def test_remove_loops_english_hallucinations():
+    segs = [
+        Segment("We start with the basics.", 0, 2),
+        Segment("Thank you for watching!", 2, 4),
+        Segment("Subtitles by the Amara.org community", 4, 6),
+        Segment("Please subscribe to my channel.", 6, 8),
+    ]
+    assert [s.text for s in remove_loops(segs)] == ["We start with the basics."]

@@ -18,6 +18,7 @@ class Segment:
 @dataclass
 class Transcript:
     segments: list[Segment] = field(default_factory=list)
+    language: str | None = None  # detected by Whisper; None for .txt/.srt input
 
     @property
     def has_timestamps(self) -> bool:
@@ -131,8 +132,9 @@ def to_plain_text(transcript: Transcript) -> str:
 
 # -------------------------------------------------------------- loop removal
 
-# Phrases Whisper is known to hallucinate on Polish silence/noise (subtitle credits
-# learned from training data). Matched against the whole normalised segment.
+# Phrases Whisper is known to hallucinate on silence/noise (subtitle credits and
+# video outros learned from training data). Matched against the whole normalised
+# segment. Polish first, then English.
 _HALLUCINATION_PATTERNS = [
     re.compile(p)
     for p in (
@@ -140,6 +142,9 @@ _HALLUCINATION_PATTERNS = [
         r".*amara\.org.*",
         r"^(subskrybuj|zasubskrybuj)( kanał)?( i zostaw (łapkę|like))?\.?$",
         r"^(transkrypcja|tłumaczenie|korekta) .*(napisy|amara).*$",
+        r"^(subtitles|captions|transcription) by .*$",
+        r"^(thank you|thanks) (so much )?for watching$",
+        r"^please subscribe( to (my|our|the) channel)?$",
     )
 ]
 

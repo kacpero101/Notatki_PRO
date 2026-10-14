@@ -41,5 +41,8 @@ def transcribe(audio_path: Path, whisper_cfg: dict[str, Any]) -> Transcript:
         for s in result.get("segments", [])
     ]
     segments = remove_loops(raw)
-    log.info("Whisper segments: %d raw, %d after loop removal", len(raw), len(segments))
-    return Transcript(segments)
+    language = result.get("language")
+    log.info(
+        "Whisper segments: %d raw, %d after loop removal, language=%s", len(raw), len(segments), language
+    )
+    return Transcript(segments, language=language)

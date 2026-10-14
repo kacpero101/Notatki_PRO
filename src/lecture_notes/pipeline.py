@@ -13,6 +13,7 @@ from typing import Any, Callable
 from .cost import format_cost, total_cost
 from .docx_builder import DocumentMeta, save_document
 from .llm import LLMProvider, create_provider
+from .modes import LECTURE, NoteMode
 from .notes import generate_notes
 from .paths import MEDIA_EXTENSIONS, TRANSCRIPT_EXTENSIONS, notes_path_for, transcript_paths_for
 from .transcript import Transcript, load_transcript, merge_into_blocks, to_plain_text, to_srt
@@ -55,10 +56,20 @@ def recording_date(path: Path, ffprobe: str | None) -> date:
     return datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_mtime)).date()
 
 
-def _transcribe(path: Path, config: dict[str, Any]) -> Transcript:
+def _transcribe(path: Path, whisper_cfg: dict[str, Any]) -> Transcript:
     from .transcribe import transcribe  # lazy: MLX import is slow
 
-    return transcribe(path, config["whisper"])
+    return transcribe(path, whisper_cfg)
+
+
+def whisper_settings(config: dict[str, Any], mode: NoteMode) -> dict[str, Any]:
+    """[whisper] settings with the mode's overrides from [modes.<name>] applied."""
+    whisper_cfg = dict(config["whisper"])
+    overrides = (config.get("modes") or {}).get(mode.name) or {}
+    for key in ("language", "initial_prompt"):
+        if f"whisper_{key}" in overrides:
+            whisper_cfg[key] = overrides[f"whisper_{key}"]
+    return whisper_cfg
 
 
 def process_file(
@@ -66,6 +77,7 @@ def process_file(
     config: dict[str, Any],
     provider_factory: Callable[[dict[str, Any]], LLMProvider] | None = None,
     transcriber: Callable[[Path, dict[str, Any]], Transcript] | None = None,
+    mode: NoteMode = LECTURE,
 ) -> ProcessResult:
     path = path.expanduser().resolve()
     if not path.is_file():
@@ -79,7 +91,7 @@ def process_file(
 
     transcript_paths = None
     if ext in MEDIA_EXTENSIONS:
-        transcript = (transcriber or _transcribe)(path, config)
+        transcript = (transcriber or _transcribe)(path, whisper_settings(config, mode))
         if not transcript.segments:
             raise UserError(f"Nie rozpoznano mowy w nagraniu: {path.name}")
         txt_path, srt_path = transcript_paths_for(path)
@@ -103,6 +115,8 @@ def process_file(
         has_timestamps=transcript.has_timestamps,
         duration=transcript.duration,
         max_chars=int(config["llm"].get("max_transcript_chars_per_request", 250_000)),
+        mode=mode,
+        language=transcript.language,
     )
 
     cost = total_cost(result.usage, config.get("pricing", {}))
@@ -116,11 +130,11 @@ def process_file(
         generated=datetime.now(),
         source_name=path.name,
     )
-    notes_path = save_document(result.notes, meta, notes_path_for(path))
+    notes_path = save_document(result.notes, meta, notes_path_for(path), mode)
     tokens_in = sum(u.input_tokens for u in result.usage)
     tokens_out = sum(u.output_tokens for u in result.usage)
     log.info(
-        "Notes saved: %s (parts=%d, input_tokens=%d, output_tokens=%d, cost=%s)",
-        notes_path.name, result.parts, tokens_in, tokens_out, cost_text,
+        "Notes saved: %s (mode=%s, parts=%d, input_tokens=%d, output_tokens=%d, cost=%s)",
+        notes_path.name, mode.name, result.parts, tokens_in, tokens_out, cost_text,
     )
     return ProcessResult(notes_path, cost, cost_text, transcript_paths)

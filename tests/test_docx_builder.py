@@ -1,8 +1,10 @@
 from datetime import date, datetime
 
+from conftest import SAMPLE_GENERAL_NOTES
 from docx import Document
 
 from lecture_notes.docx_builder import FORMULA_STYLE, MONO_FONT, DocumentMeta, save_document
+from lecture_notes.modes import GENERAL
 from lecture_notes.notes import empty_notes
 
 META = DocumentMeta(
@@ -77,3 +79,31 @@ def test_polish_language_set(tmp_path, sample_notes):
     doc = _build(tmp_path, sample_notes)
     xml = doc.styles["Normal"].element.xml
     assert 'w:val="pl-PL"' in xml
+
+
+GENERAL_H1 = [
+    "Streszczenie", "Notatki tematyczne", "Kluczowe pojęcia", "Najważniejsze wnioski",
+    "Pytania do powtórki", "Uzupełnienia (spoza nagrania)", "Fragmenty do sprawdzenia", "Metadane",
+]
+
+
+def test_general_mode_sections(tmp_path):
+    path = save_document(SAMPLE_GENERAL_NOTES, META, tmp_path / "g.docx", GENERAL)
+    doc = Document(str(path))
+    # formulas are optional and empty here -> section omitted
+    assert _headings(doc, 1) == GENERAL_H1
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "[00:00:45] Nagroda definiuje cel agenta." in text
+    assert "Kontekst — Termin pochodzi z psychologii behawioralnej." in text
+    assert "Tych informacji nie ma w nagraniu" in text
+    assert "Na egzamin" not in text
+
+
+def test_general_mode_optional_sections_shown_when_present(tmp_path):
+    notes = dict(SAMPLE_GENERAL_NOTES, formulas=[
+        {"description": "Zysk", "formula": "G = sum_{t} gamma^t r_t", "example": "", "timestamp": ""},
+    ], supplements=[])
+    doc = Document(str(save_document(notes, META, tmp_path / "g.docx", GENERAL)))
+    headings = _headings(doc, 1)
+    assert "Wzory i przykłady" in headings
+    assert "Uzupełnienia (spoza nagrania)" not in headings
