@@ -122,7 +122,7 @@ def run_files(
 # --------------------------------------------------------------------- setup
 
 def run_setup() -> int:
-    from .keychain import get_api_key, set_api_key
+    from .credentials import key_path, set_api_key, stored_api_key
 
     print(f"lecture-notes {__version__} — konfiguracja\n")
     if write_default_config():
@@ -131,11 +131,10 @@ def run_setup() -> int:
         print(f"Plik konfiguracji już istnieje: {CONFIG_PATH}")
     config = load_config()
 
-    existing = get_api_key("anthropic")
     replace = True
-    if existing:
-        answer = input("Klucz API Anthropic jest już zapisany. Zastąpić? [t/N] ").strip().lower()
-        replace = answer in ("t", "tak", "y", "yes")
+    if stored_api_key("anthropic"):
+        answer = input(f"Klucz API Anthropic jest już zapisany ({key_path('anthropic')}). Zastąpić? [t/N] ")
+        replace = answer.strip().lower() in ("t", "tak", "y", "yes")
     if replace:
         key = getpass.getpass("Wklej klucz API Anthropic (sk-ant-…, nie będzie widoczny): ").strip()
         if not key:
@@ -143,8 +142,9 @@ def run_setup() -> int:
             return 1
         if not key.startswith("sk-ant-"):
             print("Uwaga: klucz nie zaczyna się od 'sk-ant-'. Zapisuję mimo to.")
-        set_api_key("anthropic", key)
-        print("Klucz zapisany w Pęku kluczy macOS (usługa: lecture-notes).")
+        path = set_api_key("anthropic", key)
+        print(f"Klucz zapisany w pliku {path} (może go czytać tylko Twoje konto).")
+    _remove_old_keychain_entry()
 
     ok = _verify_key(config)
     for name, p in (config.get("paths") or {}).items():
@@ -155,10 +155,25 @@ def run_setup() -> int:
     return 0 if ok else 1
 
 
+def _remove_old_keychain_entry() -> None:
+    """Earlier versions kept the key in the macOS Keychain; offer to delete it."""
+    from .credentials import delete_old_keychain_entry, old_keychain_entry_exists
+
+    if not old_keychain_entry_exists("anthropic"):
+        return
+    answer = input("W Pęku kluczy jest klucz API z poprzedniej wersji programu (nieużywany). Usunąć go? [T/n] ")
+    if answer.strip().lower() not in ("", "t", "tak", "y", "yes"):
+        return
+    if delete_old_keychain_entry("anthropic"):
+        print("✓ Usunięto stary klucz z Pęku kluczy.")
+    else:
+        print("Nie udało się usunąć — usuń wpis „lecture-notes” ręcznie w aplikacji Dostęp do pęku kluczy.")
+
+
 def _verify_key(config: dict) -> bool:
     import anthropic
 
-    from .keychain import get_api_key
+    from .credentials import get_api_key
 
     model = config["llm"]["model"]
     try:

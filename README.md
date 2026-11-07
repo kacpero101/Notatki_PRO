@@ -73,9 +73,15 @@ lecture-notes setup
 ```
 
 `setup` creates `~/.config/lecture-notes/config.toml` (a copy of
-[`config.example.toml`](config.example.toml)), asks for your Anthropic API key, stores it in
-the **macOS Keychain** (service `lecture-notes`) and checks that it works. The key is never
-written to files or logs. As a fallback the `ANTHROPIC_API_KEY` environment variable is used.
+[`config.example.toml`](config.example.toml)), asks for your Anthropic API key, saves it in
+`~/.config/lecture-notes/anthropic-api-key` and checks that it works. The file can be read
+only by your user account (permissions 600; the program restores them if you create the file
+by hand). The key is never written to logs. As a fallback the `ANTHROPIC_API_KEY`
+environment variable is used — in the terminal only, Finder Quick Actions do not see it.
+
+Versions up to 0.1.0 kept the key in the macOS Keychain. After upgrading, run
+`lecture-notes setup` once to save the key in the new place; it also offers to delete the
+old Keychain entry.
 
 In `config.toml` you can change:
 
@@ -185,7 +191,7 @@ src/lecture_notes/
   llm/anthropic_provider.py
   docx_builder.py   python-docx rendering
   cost.py           cost from usage and config prices
-  keychain.py       API key in the macOS Keychain
+  credentials.py    API key file (~/.config/lecture-notes/anthropic-api-key, mode 600)
   quick_action.py   Finder Quick Action bundle
 ```
 
@@ -228,7 +234,7 @@ Szybki start:
 
 ```bash
 pipx install --python /opt/homebrew/bin/python3.12 .
-lecture-notes setup                  # klucz API trafia do Pęku kluczy macOS
+lecture-notes setup                  # klucz API trafia do ~/.config/lecture-notes/anthropic-api-key
 lecture-notes install-quick-action   # obie czynności w Finderze
 ```
 

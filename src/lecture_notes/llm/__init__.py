@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from ..keychain import get_api_key
+from ..credentials import get_api_key
 from .base import LLMError, LLMProvider, LLMResponse, UsageRecord
 
 

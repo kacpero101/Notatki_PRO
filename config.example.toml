@@ -1,7 +1,8 @@
 # lecture-notes configuration.
 # Copy to ~/.config/lecture-notes/config.toml (`lecture-notes setup` does it for you)
 # and edit. Any key you leave out falls back to the value in this file.
-# The API key is NOT stored here — it lives in the macOS Keychain.
+# The API key is NOT stored here — `lecture-notes setup` saves it in
+# ~/.config/lecture-notes/anthropic-api-key (readable only by your account).
 
 [llm]
 # Provider implementation. Currently available: "anthropic".
