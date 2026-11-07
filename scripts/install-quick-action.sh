@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Installs the Finder Quick Action "Zrób notatki" into ~/Library/Services.
+# Installs the Finder Quick Actions ("Zrób notatki", "Zrób notatki (dowolny temat)")
+# into ~/Library/Services. Run it again after every upgrade.
 # Requires lecture-notes to be installed with pipx first.
 set -euo pipefail
 

@@ -101,8 +101,10 @@ This installs two actions. Right-click one or more recordings (`m4a`, `mp3`, `wa
 - **Zrób notatki (dowolny temat)** — notes on any topic.
 
 You get a notification when processing starts, and another one when the notes are ready
-(with the API cost) or when something failed. A one-hour lecture takes a few minutes to
-transcribe on an M-series Mac; a gear icon in the menu bar shows that the action is running.
+(with the API cost) or when something failed. Errors are also shown in an alert window,
+which needs no notification permission, so a failed run is never silent. A one-hour lecture
+takes a few minutes to transcribe on an M-series Mac (the first run also downloads the
+~1.6 GB Whisper model); a gear icon in the menu bar shows that the action is running.
 
 Output, next to the source file (existing files are never overwritten — a ` (2)` suffix is added):
 
@@ -114,10 +116,15 @@ Wykład 3 – notatki.docx      # notes
 ```
 
 If an action is missing: *System Settings → General → Login Items & Extensions → Finder*
-and enable both “Zrób notatki” actions. If no notifications appear, allow notifications for
-*Script Editor* in *System Settings → Notifications*. Remove the action with
-`lecture-notes uninstall-quick-action` (removes both). After upgrading from a version with
-a single action, run `lecture-notes install-quick-action` again to get the second one.
+and enable both “Zrób notatki” actions. Notifications are sent through *Script Editor*;
+`install-quick-action` sends a test notification — if it does not appear, allow
+notifications for *Script Editor* in *System Settings → Notifications*. Everything the
+action prints goes to `~/Library/Logs/lecture-notes/quick-action.log`. Remove the actions
+with `lecture-notes uninstall-quick-action` (removes both).
+
+**After every upgrade, run `lecture-notes install-quick-action` again**: the actions are
+generated files, and older ones do not get the fixes (e.g. versions before the alert window
+discarded all output, so a failed start looked like nothing happened).
 
 ## Usage from the terminal
 
@@ -227,5 +234,9 @@ lecture-notes install-quick-action   # obie czynności w Finderze
 
 Potem: prawy klik na nagraniu lub pliku `.txt` / `.srt` → *Szybkie czynności* →
 *Zrób notatki* albo *Zrób notatki (dowolny temat)*. Powiadomienie pokaże, kiedy notatki będą gotowe i ile kosztowało wywołanie
-API. Konfiguracja (model, cennik, podpowiedź słownictwa dla Whispera) jest w
-`~/.config/lecture-notes/config.toml`, logi w `~/Library/Logs/lecture-notes/`.
+API; błędy pojawiają się dodatkowo w oknie dialogowym. Jeśli powiadomienie testowe po
+`install-quick-action` się nie pokazało, włącz powiadomienia dla „Edytor skryptów” w
+*Ustawienia systemowe → Powiadomienia*. Po każdej aktualizacji programu uruchom ponownie
+`lecture-notes install-quick-action`. Konfiguracja (model, cennik, podpowiedź słownictwa dla Whispera) jest w
+`~/.config/lecture-notes/config.toml`, logi w `~/Library/Logs/lecture-notes/`
+(`quick-action.log` — wszystko, co wypisała szybka czynność).

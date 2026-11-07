@@ -14,7 +14,7 @@ from . import __version__
 from .config import CONFIG_PATH, LOG_DIR, load_config, write_default_config
 from .llm import LLMError
 from .modes import MODES, get_mode
-from .notify import notify
+from .notify import alert, notify
 from .pipeline import UserError, process_file
 
 log = logging.getLogger("lecture_notes")
@@ -34,8 +34,9 @@ def setup_logging(verbose: bool) -> Path:
         sh = logging.StreamHandler()
         sh.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         root.addHandler(sh)
-    # HTTP client libraries stay quiet; request headers (API key) are never logged
-    for name in ("httpx", "httpcore", "anthropic", "huggingface_hub", "urllib3"):
+    # HTTP client libraries stay quiet; request headers (API key) are never logged.
+    # anthropic 1.x and huggingface_hub 2.x use httpx2/httpcore2.
+    for name in ("httpx", "httpcore", "httpx2", "httpcore2", "anthropic", "huggingface_hub", "urllib3"):
         logging.getLogger(name).setLevel(logging.WARNING)
     return log_file
 
@@ -53,9 +54,18 @@ def _prepare_environment(config: dict) -> None:
 # ------------------------------------------------------------------- process
 
 def run_files(
-    files: list[str], model: str | None, use_notifications: bool, verbose: bool, mode_name: str = "lecture"
+    files: list[str], model: str | None, use_notifications: bool, verbose: bool, mode_name: str = "lecture",
+    quick_action: bool = False,
 ) -> int:
+    """Process files one after another.
+
+    With ``quick_action`` (run from Finder, no terminal) errors are also shown in an
+    alert, because notifications may be switched off, and the exit code is 0 once
+    they have been reported: the Quick Action script treats any other exit code as
+    a crash and reports it itself.
+    """
     log_file = setup_logging(verbose)
+    log.info("Started: %d file(s), mode=%s, quick_action=%s", len(files), mode_name, quick_action)
     mode = get_mode(mode_name)
     say = notify if use_notifications else (lambda *a, **k: None)
     try:
@@ -64,12 +74,15 @@ def run_files(
         log.exception("Config error")
         say(f"Błąd konfiguracji: {e}", title="Notatki — błąd", sound="Basso")
         print(f"Błąd konfiguracji ({CONFIG_PATH}): {e}", file=sys.stderr)
+        if quick_action:
+            alert(f"Błąd w pliku konfiguracji {CONFIG_PATH}:\n{e}")
+            return 0
         return 2
     if model:
         config["llm"]["model"] = model
     _prepare_environment(config)
 
-    failures = 0
+    errors: list[str] = []
     for i, name in enumerate(files, 1):
         path = Path(name)
         counter = f" ({i}/{len(files)})" if len(files) > 1 else ""
@@ -79,13 +92,13 @@ def run_files(
         try:
             result = process_file(path, config, mode=mode)
         except (UserError, LLMError) as e:
-            failures += 1
+            errors.append(f"{path.name}: {e}")
             log.error("%s: %s", path.name, e, exc_info=True)
             say(f"{path.name}: {e}", title="Notatki — błąd", sound="Basso")
             print(f"  ✗ {e}", file=sys.stderr)
             continue
         except Exception as e:
-            failures += 1
+            errors.append(f"{path.name}: nieoczekiwany błąd ({type(e).__name__}: {e})")
             log.exception("Unexpected error for %s", path)
             say(f"{path.name}: nieoczekiwany błąd ({type(e).__name__}). Szczegóły w logu.",
                 title="Notatki — błąd", sound="Basso")
@@ -97,9 +110,13 @@ def run_files(
         if result.transcript_paths:
             print(f"  ✓ {result.transcript_paths[0].name}, {result.transcript_paths[1].name}")
         print(f"  koszt API {result.cost_text}")
-    if failures:
-        print(f"Szczegóły błędów: {log_file}", file=sys.stderr)
-    return 1 if failures else 0
+    if not errors:
+        return 0
+    print(f"Szczegóły błędów: {log_file}", file=sys.stderr)
+    if quick_action:
+        alert("\n\n".join(errors) + f"\n\nSzczegóły w logu: {log_file}")
+        return 0
+    return 1
 
 
 # --------------------------------------------------------------------- setup
@@ -162,7 +179,7 @@ def _verify_key(config: dict) -> bool:
 # --------------------------------------------------------------------- quick action
 
 def run_install_quick_action() -> int:
-    from .quick_action import install
+    from .quick_action import QUICK_ACTION_LOG, install
 
     exe = Path(sys.argv[0]).absolute()
     if exe.name != "lecture-notes":
@@ -177,6 +194,13 @@ def run_install_quick_action() -> int:
     print("  W Finderze: prawy klik na pliku → Szybkie czynności.")
     print("  Jeśli ich nie widać: Ustawienia systemowe → Ogólne → Rozszerzenia logowania i rozszerzenia")
     print("  → Finder → włącz obie czynności.")
+    # Notifications from osascript are dropped silently until Script Editor may send
+    # them; a test now also makes macOS ask for that permission.
+    notify("Tak wyglądają powiadomienia o postępie i gotowych notatkach.", title="Notatki — test")
+    print("\nWysłano powiadomienie testowe „Notatki — test”. Jeśli się nie pojawiło, włącz powiadomienia")
+    print("dla aplikacji „Edytor skryptów” (Script Editor): Ustawienia systemowe → Powiadomienia.")
+    print("Bez nich notatki i tak powstaną, a błędy pokażą się w oknie dialogowym.")
+    print(f"Log szybkiej czynności: {QUICK_ACTION_LOG}")
     return 0
 
 
@@ -212,10 +236,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", help="nadpisz model z config.toml (np. claude-haiku-5-5)")
     parser.add_argument("--no-notify", action="store_true", help="bez powiadomień macOS")
     parser.add_argument("-q", "--quiet", action="store_true", help="bez logów w terminalu")
+    # set by the Finder Quick Action script (see quick_action.py)
+    parser.add_argument("--quick-action", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
     verbose = sys.stderr.isatty() and not args.quiet
-    return run_files(args.files, args.model, not args.no_notify, verbose, args.mode)
+    return run_files(args.files, args.model, not args.no_notify, verbose, args.mode, args.quick_action)
 
 
 if __name__ == "__main__":

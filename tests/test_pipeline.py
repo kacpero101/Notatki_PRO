@@ -1,6 +1,8 @@
 import copy
 import plistlib
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from conftest import SAMPLE_GENERAL_NOTES, SAMPLE_NOTES, FakeProvider
@@ -140,30 +142,127 @@ def test_quick_action_bundles(tmp_path):
     exe = tmp_path / "bin" / "lecture-notes"
     targets = install(exe, services_dir=tmp_path)
     assert [t.name for t in targets] == ["Zrób notatki.workflow", "Zrób notatki (dowolny temat).workflow"]
-    for target in targets:
-        for name in ("Info.plist", "document.wflow"):
-            lint = subprocess.run(["/usr/bin/plutil", "-lint", str(target / "Contents" / name)], capture_output=True)
-            assert lint.returncode == 0, lint.stdout
+    if Path("/usr/bin/plutil").exists():  # macOS only
+        for target in targets:
+            for name in ("Info.plist", "document.wflow"):
+                lint = subprocess.run(["/usr/bin/plutil", "-lint", str(target / "Contents" / name)],
+                                      capture_output=True)
+                assert lint.returncode == 0, lint.stdout
 
     service, params = _workflow(targets[0])
     assert service["NSMenuItem"]["default"] == "Zrób notatki"
     assert service["NSSendFileTypes"] == FILE_TYPES
     assert params["inputMethod"] == 1 and params["shell"] == "/bin/zsh"
-    assert str(exe) in params["COMMAND_STRING"] and "--mode" not in params["COMMAND_STRING"]
+    assert f'"$exe" --quick-action "$@"' in params["COMMAND_STRING"]
+    assert f"exe={exe}\n" in params["COMMAND_STRING"]
     assert 'export PATH="/opt/homebrew/bin' in params["COMMAND_STRING"]
+    assert '"$@" >>"$log" 2>&1' in params["COMMAND_STRING"]  # program output kept in the log
 
     service, params = _workflow(targets[1])
     assert service["NSMenuItem"]["default"] == "Zrób notatki (dowolny temat)"
-    assert f'{exe} --mode general "$@"' in params["COMMAND_STRING"]
+    assert '"$exe" --quick-action --mode general "$@"' in params["COMMAND_STRING"]
 
     assert uninstall(services_dir=tmp_path) == 2
     assert not any(t.exists() for t in targets)
     assert uninstall(services_dir=tmp_path) == 0
 
 
+def test_workflow_matches_automator_run_shell_script(tmp_path):
+    [target, _] = install(tmp_path / "lecture-notes", services_dir=tmp_path)
+    action = plistlib.loads((target / "Contents" / "document.wflow").read_bytes())["actions"][0]["action"]
+    # Run Shell Script takes strings (Automator turns Finder items into paths)
+    assert action["AMAccepts"]["Types"] == ["com.apple.cocoa.string"]
+    args = action["arguments"]
+    assert [args[k]["uuid"] for k in sorted(args)] == sorted(args)
+    assert {a["name"] for a in args.values()} == set(action["ActionParameters"])
+
+
 def test_shell_command_quotes_paths_with_spaces(tmp_path):
     cmd = shell_command(tmp_path / "my dir" / "lecture-notes", ["--mode", "general"])
-    assert "'" in cmd and '--mode general "$@"' in cmd
+    assert f"exe='{tmp_path}/my dir/lecture-notes'" in cmd
+    assert '"$exe" --quick-action --mode general "$@"' in cmd
+
+
+# ---------------------------------------------------------------- Quick Action script
+# The generated zsh script is run for real, with a fake osascript that records alerts.
+
+SHELL = shutil.which("zsh") or shutil.which("bash")
+
+
+def _run_action_script(tmp_path, exe, files):
+    alerts = tmp_path / "alerts.txt"
+    fake = tmp_path / "osascript"
+    fake.write_text(f'#!/bin/sh\nfor a in "$@"; do :; done\nprintf "%s\\n---\\n" "$a" >> {alerts}\n')
+    fake.chmod(0o755)
+    log = tmp_path / "logs" / "quick-action.log"
+    script = shell_command(exe, ["--mode", "general"], log_file=log).replace("/usr/bin/osascript", str(fake))
+    result = subprocess.run([SHELL, "-c", script, "zrob-notatki", *files], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr  # never a generic Finder error alert
+    return (alerts.read_text() if alerts.exists() else ""), (log.read_text() if log.exists() else "")
+
+
+def _fake_program(tmp_path, body):
+    exe = tmp_path / "bin dir" / "lecture-notes"
+    exe.parent.mkdir()
+    exe.write_text("#!/bin/sh\n" + body)
+    exe.chmod(0o755)
+    return exe
+
+
+@pytest.mark.skipif(SHELL is None, reason="no zsh/bash")
+def test_action_script_passes_files_and_logs_output(tmp_path):
+    exe = _fake_program(tmp_path, 'for a in "$@"; do echo "arg:$a"; done\n')
+    alerts, log = _run_action_script(tmp_path, exe, ["/x/Wykład 1.m4a", "/x/b.srt"])
+    assert alerts == ""
+    assert "arg:--quick-action\narg:--mode\narg:general\narg:/x/Wykład 1.m4a\narg:/x/b.srt" in log
+    assert "plików: 2" in log
+
+
+@pytest.mark.skipif(SHELL is None, reason="no zsh/bash")
+def test_action_script_alerts_when_program_crashes(tmp_path):
+    exe = _fake_program(tmp_path, 'echo "ModuleNotFoundError: No module named docx" >&2\nexit 1\n')
+    alerts, log = _run_action_script(tmp_path, exe, ["/x/a.m4a"])
+    assert "kod 1" in alerts and "ModuleNotFoundError" in alerts
+    assert "ModuleNotFoundError" in log
+
+
+@pytest.mark.skipif(SHELL is None, reason="no zsh/bash")
+def test_action_script_alerts_when_program_is_missing(tmp_path):
+    alerts, _ = _run_action_script(tmp_path, tmp_path / "nope" / "lecture-notes", ["/x/a.m4a"])
+    assert "Nie znaleziono programu lecture-notes" in alerts and "install-quick-action" in alerts
+
+
+@pytest.mark.skipif(SHELL is None, reason="no zsh/bash")
+def test_action_script_alerts_without_files(tmp_path):
+    exe = _fake_program(tmp_path, "exit 0\n")
+    alerts, _ = _run_action_script(tmp_path, exe, [])
+    assert "nie przekazał żadnych plików" in alerts
+
+
+def test_cli_quick_action_mode_shows_alert_and_exits_0(tmp_path, config, monkeypatch):
+    bad = tmp_path / "x.pdf"
+    bad.write_bytes(b"x")
+    alerts = []
+    monkeypatch.setattr(cli, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "alert", lambda msg, title="": alerts.append(msg))
+    monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "logs")
+    assert cli.main(["--quick-action", str(bad), "-q"]) == 0
+    assert len(alerts) == 1 and "x.pdf: Nieobsługiwany" in alerts[0]
+    # from the terminal: no alert, non-zero exit
+    assert cli.main([str(bad), "-q"]) == 1
+    assert len(alerts) == 1
+
+
+def test_cli_quick_action_mode_config_error(tmp_path, monkeypatch):
+    broken = tmp_path / "config.toml"
+    broken.write_text("[llm\n")
+    monkeypatch.setenv("LECTURE_NOTES_CONFIG", str(broken))
+    alerts = []
+    monkeypatch.setattr(cli, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "alert", lambda msg, title="": alerts.append(msg))
+    monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "logs")
+    assert cli.main(["--quick-action", str(tmp_path / "a.srt"), "-q"]) == 0
+    assert alerts and "konfiguracji" in alerts[0]
 
 
 def test_general_mode_pipeline(tmp_path, config):
